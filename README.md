@@ -54,7 +54,7 @@ CLUSTER_LOGGING_CHANNEL="stable-6.7"   # from redhat-operators (see §2)
 LOKI_OPERATOR_CHANNEL="stable-6.7"
 COO_CHANNEL="stable"
 OPERATOR_SOURCE="redhat-operators"
-S4_API_HOST="s3.s4.apps.<your-cluster-domain>"
+S4_API_HOST="s3-s4.apps.<your-cluster-domain>"  # one label under apps (router wildcard)
 S4_ACCESS_KEY="s4admin"
 S4_SECRET_KEY="s4secret"
 S4_UI_PASSWORD="changeme"          # change this
@@ -93,7 +93,7 @@ oc apply -k logging/operator/overlays/lab
 oc apply -k logging/loki-operator/overlays/lab
 oc apply -k logging/loki-instance/overlays/lab   # matches OVERLAY
 oc apply -k logging/instance/base
-oc apply -k logging/coo/overlays/lab
+oc apply -k logging/coo/overlays/lab            # re-run after COO CSV Succeeded if UIPlugin CRD missing
 ```
 
 **Or GitOps:** commit/push, then:
@@ -265,12 +265,21 @@ oc apply -k logging/loki-instance/overlays/lab
 # ./scripts/sync-odf-loki-secret.sh   # if Job has not finished
 
 oc get lokistack logging-loki -n openshift-logging -w
+oc get pods -n openshift-logging -w
 ```
 
 ### Collector and console UI
 
 ```bash
 oc apply -k logging/instance/base
+
+# COO Subscription first — UIPlugin needs the CRD the operator installs
+oc apply -k logging/coo/overlays/lab
+oc wait --for=jsonpath='{.status.phase}'=Succeeded csv \
+  -n openshift-cluster-observability-operator \
+  -l operators.coreos.com/cluster-observability-operator.openshift-cluster-observability-operator \
+  --timeout=300s
+# Re-apply once the UIPlugin CRD exists (first apply may error on UIPlugin only)
 oc apply -k logging/coo/overlays/lab
 
 oc get clusterlogforwarder -n openshift-logging
@@ -438,7 +447,7 @@ Only these belong in the HEADER. Everything else is a fixed project default insi
 | `COO_CHANNEL` | always | Cluster Observability Operator channel | `stable` |
 | `OPERATOR_SOURCE` | always | OLM catalog source | `redhat-operators` |
 | `OPERATOR_SOURCE_NAMESPACE` | always | Catalog namespace | `openshift-marketplace` |
-| `S4_API_HOST` | `s4` | S3 Route hostname | `s3.s4.apps.example.com` |
+| `S4_API_HOST` | `s4` | S3 Route hostname (`*.apps` wildcard-safe) | `s3-s4.apps.example.com` |
 | `S4_ACCESS_KEY` / `S4_SECRET_KEY` | `s4` | S4 / Loki credentials | `s4admin` / `s4secret` |
 | `S4_UI_PASSWORD` | `s4` | S4 UI / REST password | `changeme` |
 | `S4_DEPLOYED_ON_CLUSTER` | `s4` | Fetch Loki CA after S4 is up | `false` |

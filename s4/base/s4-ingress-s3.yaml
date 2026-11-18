@@ -12,7 +12,7 @@ metadata:
     app.kubernetes.io/component: storage
 spec:
   rules:
-    - host: s3.s4.example.com # Change to your actual hostname
+    - host: s3-s4.apps.example.com # one DNS label under apps (matches *.apps wildcard)
       http:
         paths:
           - path: /
@@ -26,4 +26,4 @@ spec:
   # tls:
   #   - secretName: s4-api-tls
   #     hosts:
-  #       - s3.s4.example.com
+  #       - s3-s4.apps.example.com

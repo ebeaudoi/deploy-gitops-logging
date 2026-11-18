@@ -11,7 +11,7 @@
   value: bG9nZ2luZ3N0YWNr
 - op: replace
   path: /data/endpoint
-  value: aHR0cHM6Ly9zMy5zNC5hcHBzLmV4YW1wbGUuY29t
+  value: aHR0cHM6Ly9zMy1zNC5hcHBzLmViZG4tcmQzLmViZWF1ZG9pLnRhbWxhYi5yZHUyLnJlZGhhdC5jb20=
 - op: replace
   path: /data/forcepathstyle
   value: dHJ1ZQ==

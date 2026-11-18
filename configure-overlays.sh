@@ -39,7 +39,7 @@ OVERLAY="lab"
 STORAGE_BACKEND="s4"
 
 # Block StorageClass for Loki PVCs (must exist on the cluster)
-LOKI_STORAGE_CLASS="gp3-csi"
+LOKI_STORAGE_CLASS="thin-csi"
 
 # --- Operator Subscription channels (redhat-operators) ---
 # Discover defaults:
@@ -53,12 +53,13 @@ OPERATOR_SOURCE="redhat-operators"
 OPERATOR_SOURCE_NAMESPACE="openshift-marketplace"
 
 # --- S4 only (STORAGE_BACKEND=s4) ---
-S4_API_HOST="s3.s4.apps.example.com"   # S3 Route hostname (not the UI route)
+# Must match router wildcard (*.apps.<cluster>) — use one DNS label, e.g. s3-s4.apps.… not s3.s4.apps.…
+S4_API_HOST="s3-s4.apps.ebdn-rd3.ebeaudoi.tamlab.rdu2.redhat.com"
 S4_ACCESS_KEY="s4admin"
 S4_SECRET_KEY="s4secret"
 S4_UI_PASSWORD="changeme"
 # After ./deploy-s4.sh succeeds, set true and re-run to refresh Loki TLS CA.
-S4_DEPLOYED_ON_CLUSTER=false
+S4_DEPLOYED_ON_CLUSTER=true
 
 # --- External S3 only (STORAGE_BACKEND=s3) ---
 S3_ENDPOINT="https://s3.example.com"
