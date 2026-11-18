@@ -50,9 +50,10 @@ Open `configure-overlays.sh` and set:
 OVERLAY="lab"
 STORAGE_BACKEND="s4"
 LOKI_STORAGE_CLASS="gp3-csi"       # must exist: oc get storageclass
-CLUSTER_LOGGING_CHANNEL="stable-6.6"   # from packagemanifest (see §2)
-LOKI_OPERATOR_CHANNEL="stable-6.6"
+CLUSTER_LOGGING_CHANNEL="stable-6.7"   # redhat-operators only (see §2)
+LOKI_OPERATOR_CHANNEL="stable-6.7"
 COO_CHANNEL="stable"
+OPERATOR_SOURCE="redhat-operators"     # never community-operators
 S4_API_HOST="s3.s4.apps.<your-cluster-domain>"
 S4_ACCESS_KEY="s4admin"
 S4_SECRET_KEY="s4secret"
@@ -119,30 +120,52 @@ Jump to [Verify the install](#7-verify-the-install) when you are done.
 | GitOps path | OpenShift GitOps already installed (`openshift-gitops`) |
 | S4 path | Cluster can pull `quay.io/rh-aiservices-bu/s4:latest`; PVC needs a StorageClass |
 
-### Operator channels
+### Operator channels (Red Hat catalog only)
 
-List default and available channels on your cluster:
+Cluster Logging, Loki Operator, and Cluster Observability Operator are subscribed
+from **`redhat-operators` only**. Do **not** use `community-operators` (or its
+`alpha` channel) when the same package exists in the Red Hat catalog.
+
+`OPERATOR_SOURCE` must stay `redhat-operators`. `configure-overlays.sh` rejects
+community / marketplace catalog sources and rejects channel `alpha`.
+
+The same package name can exist in more than one catalog. A bare
 
 ```bash
-oc get packagemanifest cluster-logging loki-operator cluster-observability-operator \
-  -n openshift-marketplace \
-  -o custom-columns=NAME:.metadata.name,DEFAULT:.status.defaultChannel,CHANNELS:.status.channels[*].name
-```
-
-Per-package channel list (one package at a time):
-
-```bash
-oc get packagemanifest cluster-logging -n openshift-marketplace \
-  -o jsonpath='{range .status.channels[*]}{.name}{"\n"}{end}'
-
 oc get packagemanifest loki-operator -n openshift-marketplace \
-  -o jsonpath='{range .status.channels[*]}{.name}{"\n"}{end}'
-
-oc get packagemanifest cluster-observability-operator -n openshift-marketplace \
-  -o jsonpath='{range .status.channels[*]}{.name}{"\n"}{end}'
+  -o jsonpath='{.status.defaultChannel}{"\n"}'
 ```
 
-Set the matching values in the `configure-overlays.sh` HEADER (`CLUSTER_LOGGING_CHANNEL`, `LOKI_OPERATOR_CHANNEL`, `COO_CHANNEL`), then run `./configure-overlays.sh`. That writes Subscription patches under:
+often returns **`alpha`** from community — that is the wrong catalog. Always
+filter by **`CATALOG=redhat-operators`**:
+
+```bash
+oc get packagemanifest -n openshift-marketplace \
+  -o custom-columns=NAME:.metadata.name,CATALOG:.status.catalogSource,DEFAULT:.status.defaultChannel,CHANNELS:.status.channels[*].name \
+  | grep -E 'NAME|cluster-logging|loki-operator|cluster-observability-operator'
+```
+
+Default + channels for Loki from Red Hat only:
+
+```bash
+oc get packagemanifest -n openshift-marketplace -o json \
+  | python3 -c '
+import json,sys
+for i in json.load(sys.stdin)["items"]:
+    if i["metadata"]["name"]!="loki-operator":
+        continue
+    if i["status"].get("catalogSource")!="redhat-operators":
+        continue
+    print("Default:", i["status"]["defaultChannel"])
+    print("Channels:")
+    for c in i["status"]["channels"]:
+        print("-", c["name"])
+'
+```
+
+Use the Red Hat **`stable-6.x`** default for `LOKI_OPERATOR_CHANNEL` and
+`CLUSTER_LOGGING_CHANNEL` (and the same catalog filter for `COO_CHANNEL`), then
+run `./configure-overlays.sh`. That writes Subscription patches under:
 
 - `logging/operator/overlays/<OVERLAY>/`
 - `logging/loki-operator/overlays/<OVERLAY>/`
@@ -424,10 +447,10 @@ Only these belong in the HEADER. Everything else is a fixed project default insi
 | `OVERLAY` | always | Logging / operator / S4 overlay directory name | `lab` |
 | `STORAGE_BACKEND` | always | `s4`, `s3`, or `odf` | `s4` |
 | `LOKI_STORAGE_CLASS` | always | Block StorageClass for Loki PVCs | `gp3-csi` |
-| `CLUSTER_LOGGING_CHANNEL` | always | Cluster Logging Operator channel | `stable-6.6` |
-| `LOKI_OPERATOR_CHANNEL` | always | Loki Operator channel | `stable-6.6` |
+| `CLUSTER_LOGGING_CHANNEL` | always | Cluster Logging channel (`redhat-operators`) | `stable-6.7` |
+| `LOKI_OPERATOR_CHANNEL` | always | Loki Operator channel (`redhat-operators`; not `alpha`) | `stable-6.7` |
 | `COO_CHANNEL` | always | Cluster Observability Operator channel | `stable` |
-| `OPERATOR_SOURCE` | always | OLM catalog source name | `redhat-operators` |
+| `OPERATOR_SOURCE` | always | Must be `redhat-operators` (community rejected) | `redhat-operators` |
 | `OPERATOR_SOURCE_NAMESPACE` | always | Catalog namespace | `openshift-marketplace` |
 | `S4_API_HOST` | `s4` | S3 Route hostname | `s3.s4.apps.example.com` |
 | `S4_ACCESS_KEY` / `S4_SECRET_KEY` | `s4` | S4 / Loki credentials | `s4admin` / `s4secret` |
