@@ -41,10 +41,8 @@ STORAGE_BACKEND="s4"
 # Block StorageClass for Loki PVCs (must exist on the cluster)
 LOKI_STORAGE_CLASS="gp3-csi"
 
-# --- Operator Subscription channels ---
-# Always use redhat-operators (never community-operators) when the package exists there.
-# Bare `oc get packagemanifest <name>` may pick community and show defaultChannel=alpha.
-# Discover Red Hat defaults only:
+# --- Operator Subscription channels (redhat-operators) ---
+# Discover defaults:
 #   oc get packagemanifest -n openshift-marketplace \
 #     -o custom-columns=NAME:.metadata.name,CATALOG:.status.catalogSource,DEFAULT:.status.defaultChannel,CHANNELS:.status.channels[*].name \
 #     | grep -E 'NAME|cluster-logging|loki-operator|cluster-observability'
@@ -192,26 +190,12 @@ apply_header_defaults() {
     GIT_PROTOCOL="https"
   fi
 
-  # Logging / Loki / COO ship in redhat-operators — never subscribe from community.
-  case "${OPERATOR_SOURCE}" in
-    redhat-operators) ;;
-    community-operators|certified-operators|redhat-marketplace)
-      echo "ERROR: OPERATOR_SOURCE='${OPERATOR_SOURCE}' is not allowed." >&2
-      echo "Use OPERATOR_SOURCE=redhat-operators for cluster-logging, loki-operator, and COO." >&2
-      exit 1
-      ;;
-    *)
-      echo "ERROR: OPERATOR_SOURCE must be 'redhat-operators' (got '${OPERATOR_SOURCE}')." >&2
-      exit 1
-      ;;
-  esac
-  if [[ "${OPERATOR_SOURCE_NAMESPACE}" != "openshift-marketplace" ]]; then
-    echo "ERROR: OPERATOR_SOURCE_NAMESPACE must be 'openshift-marketplace' (got '${OPERATOR_SOURCE_NAMESPACE}')." >&2
+  if [[ "${OPERATOR_SOURCE}" != "redhat-operators" ]]; then
+    echo "ERROR: OPERATOR_SOURCE must be 'redhat-operators' (got '${OPERATOR_SOURCE}')." >&2
     exit 1
   fi
-  if [[ "${LOKI_OPERATOR_CHANNEL}" == "alpha" || "${CLUSTER_LOGGING_CHANNEL}" == "alpha" ]]; then
-    echo "ERROR: channel 'alpha' is the community catalog default — not a Red Hat channel." >&2
-    echo "Set CLUSTER_LOGGING_CHANNEL / LOKI_OPERATOR_CHANNEL from the redhat-operators PackageManifest (e.g. stable-6.x)." >&2
+  if [[ "${OPERATOR_SOURCE_NAMESPACE}" != "openshift-marketplace" ]]; then
+    echo "ERROR: OPERATOR_SOURCE_NAMESPACE must be 'openshift-marketplace' (got '${OPERATOR_SOURCE_NAMESPACE}')." >&2
     exit 1
   fi
 }
