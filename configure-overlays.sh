@@ -41,6 +41,17 @@ STORAGE_BACKEND="s4"
 # Block StorageClass for Loki PVCs (must exist on the cluster)
 LOKI_STORAGE_CLASS="gp3-csi"
 
+# --- Operator Subscription channels ---
+# Discover available channels on your cluster:
+#   oc get packagemanifest cluster-logging loki-operator cluster-observability-operator \
+#     -n openshift-marketplace \
+#     -o custom-columns=NAME:.metadata.name,DEFAULT:.status.defaultChannel,CHANNELS:.status.channels[*].name
+CLUSTER_LOGGING_CHANNEL="stable-6.7"
+LOKI_OPERATOR_CHANNEL="alpha"
+COO_CHANNEL="stable"
+OPERATOR_SOURCE="redhat-operators"
+OPERATOR_SOURCE_NAMESPACE="openshift-marketplace"
+
 # --- S4 only (STORAGE_BACKEND=s4) ---
 S4_API_HOST="s3.s4.apps.example.com"   # S3 Route hostname (not the UI route)
 S4_ACCESS_KEY="s4admin"
@@ -122,9 +133,16 @@ LOKI_S3_ACCESS_KEY_SECRET=""
 LOKI_S3_BUCKET=""
 LOKI_S3_ENDPOINT=""
 LOGGING_INSTANCE_APP_ARGO="${LOGGING_ARGOCD_DIR}/loki-instance-app-argo.yaml"
+LOGGING_OPERATOR_APP_ARGO="${LOGGING_ARGOCD_DIR}/loggingoperator-app-argo.yaml"
+LOKI_OPERATOR_APP_ARGO="${LOGGING_ARGOCD_DIR}/lokioperator-app-argo.yaml"
+COO_APP_ARGO="${LOGGING_ARGOCD_DIR}/coo-app-argo.yaml"
 APPLOGGING_PROJECT="${LOGGING_ARGOCD_DIR}/applogging-project.yaml"
 CLUSTER_CONFIG_PROJECT="${APP_OF_APPS_DIR}/cluster-config-project.yaml"
 GIT_REPO_SECRET="${GITOPS_DIR}/git-repository-secret.yaml"
+
+LOGGING_OPERATOR_OVERLAY_DIR=""
+LOKI_OPERATOR_OVERLAY_DIR=""
+COO_OVERLAY_DIR=""
 
 # shellcheck source=gitops/git-configure-lib.sh
 source "${GITOPS_DIR}/git-configure-lib.sh"
@@ -380,16 +398,25 @@ configure_argocd_git() {
 
   local app
   for app in \
-    "${LOGGING_ARGOCD_DIR}/loggingoperator-app-argo.yaml" \
-    "${LOGGING_ARGOCD_DIR}/lokioperator-app-argo.yaml" \
+    "${LOGGING_OPERATOR_APP_ARGO}" \
+    "${LOKI_OPERATOR_APP_ARGO}" \
     "${LOGGING_INSTANCE_APP_ARGO}" \
-    "${LOGGING_ARGOCD_DIR}/coo-app-argo.yaml" \
+    "${COO_APP_ARGO}" \
     "${LOGGING_ARGOCD_DIR}/logginginstance-app-argo.yaml" \
     "${APP_OF_APPS_DIR}/logging-apps.yaml"
   do
     update_repo_url_and_revision "${app}"
   done
 
+  update_source_path \
+    "${LOGGING_OPERATOR_APP_ARGO}" \
+    "logging/operator/overlays/${OVERLAY}"
+  update_source_path \
+    "${LOKI_OPERATOR_APP_ARGO}" \
+    "logging/loki-operator/overlays/${OVERLAY}"
+  update_source_path \
+    "${COO_APP_ARGO}" \
+    "logging/coo/overlays/${OVERLAY}"
   update_source_path \
     "${LOGGING_INSTANCE_APP_ARGO}" \
     "logging/loki-instance/overlays/${OVERLAY}"
@@ -402,6 +429,106 @@ configure_argocd_git() {
 # =============================================================================
 # Overlay writers
 # =============================================================================
+
+ensure_operator_overlay() {
+  # $1 = component dir under logging/
+  # $2 = Subscription name
+  # $3 = Subscription namespace
+  # Sets RESULT_DIR to the overlay path.
+  local component="$1"
+  local sub_name="$2"
+  local sub_ns="$3"
+  local base_dir="${REPO_ROOT}/logging/${component}/base"
+  local overlay_dir="${REPO_ROOT}/logging/${component}/overlays/${OVERLAY}"
+
+  if [[ ! -d "${base_dir}" ]]; then
+    echo "ERROR: missing operator base: ${base_dir}" >&2
+    exit 1
+  fi
+
+  mkdir -p "${overlay_dir}"
+  cat > "${overlay_dir}/kustomization.yaml" <<EOF
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../../base
+
+patches:
+  - path: subscription-patch.yaml
+    target:
+      group: operators.coreos.com
+      version: v1alpha1
+      kind: Subscription
+      name: ${sub_name}
+      namespace: ${sub_ns}
+EOF
+  echo "Updated ${overlay_dir}/kustomization.yaml"
+
+  RESULT_DIR="${overlay_dir}"
+}
+
+write_subscription_channel_patch() {
+  # $1 = overlay dir, $2 = subscription name, $3 = namespace, $4 = channel
+  local overlay_dir="$1"
+  local sub_name="$2"
+  local sub_ns="$3"
+  local channel="$4"
+  local patch_file="${overlay_dir}/subscription-patch.yaml"
+
+  cat > "${patch_file}" <<EOF
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: ${sub_name}
+  namespace: ${sub_ns}
+spec:
+  channel: ${channel}
+  source: ${OPERATOR_SOURCE}
+  sourceNamespace: ${OPERATOR_SOURCE_NAMESPACE}
+EOF
+  echo "Updated ${patch_file}"
+}
+
+configure_operator_overlays() {
+  echo
+  echo "=== Operator Subscription overlays ==="
+  echo "  OVERLAY=${OVERLAY}"
+  echo "  CLUSTER_LOGGING_CHANNEL=${CLUSTER_LOGGING_CHANNEL}"
+  echo "  LOKI_OPERATOR_CHANNEL=${LOKI_OPERATOR_CHANNEL}"
+  echo "  COO_CHANNEL=${COO_CHANNEL}"
+  echo "  OPERATOR_SOURCE=${OPERATOR_SOURCE}"
+
+  : "${CLUSTER_LOGGING_CHANNEL:?CLUSTER_LOGGING_CHANNEL is required}"
+  : "${LOKI_OPERATOR_CHANNEL:?LOKI_OPERATOR_CHANNEL is required}"
+  : "${COO_CHANNEL:?COO_CHANNEL is required}"
+  : "${OPERATOR_SOURCE:?OPERATOR_SOURCE is required}"
+  : "${OPERATOR_SOURCE_NAMESPACE:?OPERATOR_SOURCE_NAMESPACE is required}"
+
+  ensure_operator_overlay "operator" "cluster-logging" "openshift-logging"
+  LOGGING_OPERATOR_OVERLAY_DIR="${RESULT_DIR}"
+  write_subscription_channel_patch \
+    "${LOGGING_OPERATOR_OVERLAY_DIR}" \
+    "cluster-logging" \
+    "openshift-logging" \
+    "${CLUSTER_LOGGING_CHANNEL}"
+
+  ensure_operator_overlay "loki-operator" "loki-operator" "openshift-operators-redhat"
+  LOKI_OPERATOR_OVERLAY_DIR="${RESULT_DIR}"
+  write_subscription_channel_patch \
+    "${LOKI_OPERATOR_OVERLAY_DIR}" \
+    "loki-operator" \
+    "openshift-operators-redhat" \
+    "${LOKI_OPERATOR_CHANNEL}"
+
+  ensure_operator_overlay "coo" "cluster-observability-operator" "openshift-cluster-observability-operator"
+  COO_OVERLAY_DIR="${RESULT_DIR}"
+  write_subscription_channel_patch \
+    "${COO_OVERLAY_DIR}" \
+    "cluster-observability-operator" \
+    "openshift-cluster-observability-operator" \
+    "${COO_CHANNEL}"
+}
 
 write_s4_route_patch() {
   cat > "${S4_ROUTE_PATCH}" <<EOF
@@ -712,6 +839,7 @@ configure_overlays() {
   echo "  OVERLAY=${OVERLAY}"
   echo "  LOKI_STORAGE_CLASS=${LOKI_STORAGE_CLASS}"
 
+  configure_operator_overlays
   configure_s4_overlays
 
   resolve_overlay_paths
@@ -740,6 +868,9 @@ main() {
   echo "  STORAGE_BACKEND=${STORAGE_BACKEND}"
   echo "  OVERLAY=${OVERLAY}"
   echo "  LOKI_STORAGE_CLASS=${LOKI_STORAGE_CLASS}"
+  echo "  CLUSTER_LOGGING_CHANNEL=${CLUSTER_LOGGING_CHANNEL}"
+  echo "  LOKI_OPERATOR_CHANNEL=${LOKI_OPERATOR_CHANNEL}"
+  echo "  COO_CHANNEL=${COO_CHANNEL}"
   echo "  GIT_REPO_URL=${GIT_REPO_URL}"
   echo "  GIT_TARGET_REVISION=${GIT_TARGET_REVISION}"
 

@@ -50,6 +50,9 @@ Open `configure-overlays.sh` and set:
 OVERLAY="lab"
 STORAGE_BACKEND="s4"
 LOKI_STORAGE_CLASS="gp3-csi"       # must exist: oc get storageclass
+CLUSTER_LOGGING_CHANNEL="stable-6.6"   # from packagemanifest (see §2)
+LOKI_OPERATOR_CHANNEL="stable-6.6"
+COO_CHANNEL="stable"
 S4_API_HOST="s3.s4.apps.<your-cluster-domain>"
 S4_ACCESS_KEY="s4admin"
 S4_SECRET_KEY="s4secret"
@@ -85,11 +88,11 @@ S4_DEPLOYED_ON_CLUSTER=true
 **Kustomize:**
 
 ```bash
-oc apply -k logging/operator/base
-oc apply -k logging/loki-operator/base
+oc apply -k logging/operator/overlays/lab
+oc apply -k logging/loki-operator/overlays/lab
 oc apply -k logging/loki-instance/overlays/lab   # matches OVERLAY
 oc apply -k logging/instance/base
-oc apply -k logging/coo/base
+oc apply -k logging/coo/overlays/lab
 ```
 
 **Or GitOps:** commit/push, then:
@@ -116,18 +119,34 @@ Jump to [Verify the install](#7-verify-the-install) when you are done.
 | GitOps path | OpenShift GitOps already installed (`openshift-gitops`) |
 | S4 path | Cluster can pull `quay.io/rh-aiservices-bu/s4:latest`; PVC needs a StorageClass |
 
-Check operator packages and adjust Subscription channels if needed:
+### Operator channels
+
+List default and available channels on your cluster:
 
 ```bash
 oc get packagemanifest cluster-logging loki-operator cluster-observability-operator \
-  -n openshift-marketplace
+  -n openshift-marketplace \
+  -o custom-columns=NAME:.metadata.name,DEFAULT:.status.defaultChannel,CHANNELS:.status.channels[*].name
 ```
 
-Files to edit if your channel differs:
+Per-package channel list (one package at a time):
 
-- `logging/operator/base/subscription.yaml`
-- `logging/loki-operator/base/subscription.yaml`
-- `logging/coo/base/coo-operator.yaml`
+```bash
+oc get packagemanifest cluster-logging -n openshift-marketplace \
+  -o jsonpath='{range .status.channels[*]}{.name}{"\n"}{end}'
+
+oc get packagemanifest loki-operator -n openshift-marketplace \
+  -o jsonpath='{range .status.channels[*]}{.name}{"\n"}{end}'
+
+oc get packagemanifest cluster-observability-operator -n openshift-marketplace \
+  -o jsonpath='{range .status.channels[*]}{.name}{"\n"}{end}'
+```
+
+Set the matching values in the `configure-overlays.sh` HEADER (`CLUSTER_LOGGING_CHANNEL`, `LOKI_OPERATOR_CHANNEL`, `COO_CHANNEL`), then run `./configure-overlays.sh`. That writes Subscription patches under:
+
+- `logging/operator/overlays/<OVERLAY>/`
+- `logging/loki-operator/overlays/<OVERLAY>/`
+- `logging/coo/overlays/<OVERLAY>/`
 
 ---
 
@@ -143,10 +162,11 @@ Only the **HEADER** at the top of `configure-overlays.sh` is meant to be edited.
 
 The script is safe to re-run. It will:
 
+- Seed operator overlays and write Subscription channel patches
 - Seed a missing Loki overlay from `overlays/s3` or `overlays/odf`
 - Seed a missing S4 overlay from `s4/overlays/lab` when `STORAGE_BACKEND=s4`
 - Rewrite patch YAML (storage, placement, credentials, CA)
-- Update Argo CD `repoURL`, revision, and the Loki instance path
+- Update Argo CD `repoURL`, revision, and overlay paths (operators + Loki)
 
 Full HEADER list: [Appendix](#11-appendix-header-variables).
 
@@ -215,8 +235,9 @@ Do storage setup first ([§4](#4-choose-object-storage)), then apply in this ord
 ### Operators
 
 ```bash
-oc apply -k logging/operator/base
-oc apply -k logging/loki-operator/base
+# Paths must match OVERLAY from the HEADER
+oc apply -k logging/operator/overlays/lab
+oc apply -k logging/loki-operator/overlays/lab
 
 oc get csv -n openshift-logging
 oc get csv -n openshift-operators-redhat
@@ -241,7 +262,7 @@ oc get lokistack logging-loki -n openshift-logging -w
 
 ```bash
 oc apply -k logging/instance/base
-oc apply -k logging/coo/base
+oc apply -k logging/coo/overlays/lab
 
 oc get clusterlogforwarder -n openshift-logging
 oc get uiplugin logging
@@ -292,11 +313,11 @@ That creates AppProject `cluster-config` and Application `logging-apps`, which s
 
 | Application | Path |
 |-------------|------|
-| `logging-operator` | `logging/operator/base` |
-| `loki-operator` | `logging/loki-operator/base` |
+| `logging-operator` | `logging/operator/overlays/<OVERLAY>` |
+| `loki-operator` | `logging/loki-operator/overlays/<OVERLAY>` |
 | `loki-instance` | `logging/loki-instance/overlays/<OVERLAY>` |
 | `logging-instance` | `logging/instance/base` |
-| `coo` | `logging/coo/base` |
+| `coo` | `logging/coo/overlays/<OVERLAY>` |
 
 ### 4. Watch sync (optional ApplicationSet)
 
@@ -400,9 +421,14 @@ Only these belong in the HEADER. Everything else is a fixed project default insi
 
 | Variable | When | Meaning | Default |
 |----------|------|---------|---------|
-| `OVERLAY` | always | Logging (and S4) overlay directory name | `lab` |
+| `OVERLAY` | always | Logging / operator / S4 overlay directory name | `lab` |
 | `STORAGE_BACKEND` | always | `s4`, `s3`, or `odf` | `s4` |
 | `LOKI_STORAGE_CLASS` | always | Block StorageClass for Loki PVCs | `gp3-csi` |
+| `CLUSTER_LOGGING_CHANNEL` | always | Cluster Logging Operator channel | `stable-6.6` |
+| `LOKI_OPERATOR_CHANNEL` | always | Loki Operator channel | `stable-6.6` |
+| `COO_CHANNEL` | always | Cluster Observability Operator channel | `stable` |
+| `OPERATOR_SOURCE` | always | OLM catalog source name | `redhat-operators` |
+| `OPERATOR_SOURCE_NAMESPACE` | always | Catalog namespace | `openshift-marketplace` |
 | `S4_API_HOST` | `s4` | S3 Route hostname | `s3.s4.apps.example.com` |
 | `S4_ACCESS_KEY` / `S4_SECRET_KEY` | `s4` | S4 / Loki credentials | `s4admin` / `s4secret` |
 | `S4_UI_PASSWORD` | `s4` | S4 UI / REST password | `changeme` |

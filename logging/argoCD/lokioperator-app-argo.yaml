@@ -8,7 +8,7 @@ spec:
   source:
     repoURL: https://github.com/ebeaudoin/deploy-gitops-logging.git
     targetRevision: HEAD
-    path: logging/loki-operator/base
+    path: logging/loki-operator/overlays/lab
   destination:
     server: https://kubernetes.default.svc
     namespace: openshift-operators-redhat
