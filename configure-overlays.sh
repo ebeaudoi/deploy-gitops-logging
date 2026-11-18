@@ -10,10 +10,18 @@
 #
 # What it updates:
 #   logging/loki-instance/overlays/<OVERLAY>/  (seeded from s3 or odf template)
+#   s4/overlays/<S4_OVERLAY>/                  (when S4_ENABLED=true)
 #   logging/argoCD/*  (repoURL, targetRevision, loki-instance path)
 #   gitops/app-of-apps/*  (repoURL, targetRevision)
 #   gitops/applicationset/logging-applicationset.yaml
 #   gitops/git-repository-secret.yaml
+#
+# Typical S4 lab flow:
+#   1) Edit HEADER (S4_* + Loki STORAGE_BACKEND=s3)
+#   2) ./configure-overlays.sh
+#   3) ./deploy-s4.sh
+#   4) Set S4_DEPLOYED_ON_CLUSTER=true, re-run ./configure-overlays.sh
+#   5) Deploy logging (oc apply -k … or GitOps)
 # =============================================================================
 
 set -euo pipefail
@@ -31,7 +39,7 @@ APPSET_FILE="${GITOPS_DIR}/applicationset/logging-applicationset.yaml"
 # =============================================================================
 
 # --- Storage backend: s3 | odf ---
-# s3  = external S3-compatible (AWS, MinIO, S4, Ceph RGW, …)
+# s3  = external S3-compatible (AWS, MinIO, in-repo S4, Ceph RGW, …)
 # odf = OpenShift Data Foundation ObjectBucketClaim / NooBaa MCG
 STORAGE_BACKEND="s3"
 
@@ -39,7 +47,25 @@ STORAGE_BACKEND="s3"
 # New names are seeded from the matching template (s3 or odf).
 OVERLAY="s3"
 
-# --- S3 / S4 parameters (used when STORAGE_BACKEND=s3) ---
+# --- In-repo S4 object storage (optional; pairs with STORAGE_BACKEND=s3) ---
+# Set S4_ENABLED=true to write s4/overlays/<S4_OVERLAY> patches and to sync
+# Loki S3 endpoint/credentials from the S4_* values below.
+S4_ENABLED=true
+# After ./deploy-s4.sh succeeds, set true and re-run this script to refresh
+# the Loki TLS CA from the live S4 API route.
+S4_DEPLOYED_ON_CLUSTER=false
+S4_OVERLAY="lab"                          # seeded from s4/overlays/lab if missing
+S4_NAMESPACE="s4"
+S4_API_ROUTE_NAME="s4-api"                # OpenShift Route object name
+S4_API_HOST="s3.s4.apps.example.com"      # S3 Route hostname (not the UI Route)
+S4_AWS_ACCESS_KEY_ID="s4admin"
+S4_AWS_SECRET_ACCESS_KEY="s4secret"
+S4_UI_USERNAME="admin"
+S4_UI_PASSWORD="changeme"
+S4_BUCKET_NAME="loggingstack"             # created by ./deploy-s4.sh
+
+# --- S3 parameters (used when STORAGE_BACKEND=s3) ---
+# When S4_ENABLED=true these access/endpoint/bucket fields are overwritten from S4_*.
 LOKI_S3_ACCESS_KEY_ID="CHANGE_ME_ACCESS_KEY"
 LOKI_S3_ACCESS_KEY_SECRET="CHANGE_ME_SECRET_KEY"
 LOKI_S3_BUCKET="loggingstack"
@@ -50,6 +76,7 @@ LOKI_S3_SECRET_NAME="logging-loki-s3"
 LOKI_S3_SECRET_TYPE="s3"
 LOKI_TLS_CA_NAME="loki-s3-ca-bundle"
 # Set FETCH_S3_CA=true to refresh loki-s3-ca-bundle-patch.yaml from the endpoint.
+# Also implied when S4_ENABLED=true and S4_DEPLOYED_ON_CLUSTER=true.
 FETCH_S3_CA=false
 # Optional PEM path; when set (and FETCH_S3_CA=true), used instead of a live fetch.
 S3_CA_FILE=""
@@ -111,6 +138,10 @@ LOKI_PLACEMENT_PATCH=""
 LOKI_CA_PATCH=""
 ODF_OBC_FILE=""
 ODF_CR_PATCH=""
+S4_OVERLAY_DIR=""
+S4_ROUTE_PATCH=""
+S4_SECRET_PATCH=""
+S4_OVERLAY_TEMPLATE="lab"
 LOGGING_INSTANCE_APP_ARGO="${LOGGING_ARGOCD_DIR}/loki-instance-app-argo.yaml"
 APPLOGGING_PROJECT="${LOGGING_ARGOCD_DIR}/applogging-project.yaml"
 CLUSTER_CONFIG_PROJECT="${APP_OF_APPS_DIR}/cluster-config-project.yaml"
@@ -196,6 +227,52 @@ resolve_overlay_paths() {
   LOKI_CA_PATCH="${OVERLAY_DIR}/loki-s3-ca-bundle-patch.yaml"
   ODF_OBC_FILE="${OVERLAY_DIR}/objectbucketclaim.yaml"
   ODF_CR_PATCH="${LOKI_CR_PATCH}"
+}
+
+resolve_s4_overlay_paths() {
+  validate_overlay_name S4_OVERLAY "${S4_OVERLAY}"
+
+  local template_dir="${REPO_ROOT}/s4/overlays/${S4_OVERLAY_TEMPLATE}"
+  S4_OVERLAY_DIR="${REPO_ROOT}/s4/overlays/${S4_OVERLAY}"
+
+  if [[ ! -d "${S4_OVERLAY_DIR}" ]]; then
+    if [[ ! -d "${template_dir}" ]]; then
+      echo "ERROR: S4 overlay template missing: ${template_dir}" >&2
+      exit 1
+    fi
+    echo "Seeding S4 overlay '${S4_OVERLAY}' from ${S4_OVERLAY_TEMPLATE}"
+    mkdir -p "${S4_OVERLAY_DIR}"
+    cp -a "${template_dir}/." "${S4_OVERLAY_DIR}/"
+  fi
+
+  S4_ROUTE_PATCH="${S4_OVERLAY_DIR}/s4-route-s3-patch.yaml"
+  S4_SECRET_PATCH="${S4_OVERLAY_DIR}/s4-secret-patch.yaml"
+}
+
+maybe_resolve_s4_host_from_cluster() {
+  if [[ ! -f "${KUBECONFIG_PATH}" ]] || ! command -v oc >/dev/null 2>&1; then
+    return 0
+  fi
+
+  local live_host
+  live_host="$(
+    oc --kubeconfig "${KUBECONFIG_PATH}" get route "${S4_API_ROUTE_NAME}" \
+      -n "${S4_NAMESPACE}" \
+      -o jsonpath='{.spec.host}' 2>/dev/null || true
+  )"
+
+  if [[ -n "${live_host}" ]]; then
+    echo "Resolved live S4 API Route host: ${live_host}"
+    S4_API_HOST="${live_host}"
+  fi
+}
+
+apply_s4_to_loki_s3_params() {
+  # When using in-repo S4, Loki S3 fields follow S4_* so they cannot drift.
+  LOKI_S3_ACCESS_KEY_ID="${S4_AWS_ACCESS_KEY_ID}"
+  LOKI_S3_ACCESS_KEY_SECRET="${S4_AWS_SECRET_ACCESS_KEY}"
+  LOKI_S3_ENDPOINT="https://${S4_API_HOST}"
+  LOKI_S3_BUCKET="${S4_BUCKET_NAME}"
 }
 
 # =============================================================================
@@ -322,6 +399,33 @@ configure_argocd_git() {
 # =============================================================================
 # Overlay writers
 # =============================================================================
+
+write_s4_route_patch() {
+  cat > "${S4_ROUTE_PATCH}" <<EOF
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: s4-api
+spec:
+  host: ${S4_API_HOST}
+EOF
+  echo "Updated ${S4_ROUTE_PATCH}"
+}
+
+write_s4_secret_patch() {
+  cat > "${S4_SECRET_PATCH}" <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: s4-credentials
+stringData:
+  AWS_ACCESS_KEY_ID: ${S4_AWS_ACCESS_KEY_ID}
+  AWS_SECRET_ACCESS_KEY: ${S4_AWS_SECRET_ACCESS_KEY}
+  UI_USERNAME: ${S4_UI_USERNAME}
+  UI_PASSWORD: ${S4_UI_PASSWORD}
+EOF
+  echo "Updated ${S4_SECRET_PATCH}"
+}
 
 write_loki_storage_patch() {
   local access_key_b64 secret_b64 bucket_b64 endpoint_b64 force_b64
@@ -564,6 +668,38 @@ EOF
   echo "Updated ${LOKI_CA_PATCH}"
 }
 
+configure_s4_overlays() {
+  echo
+  echo "=== S4 overlays ==="
+  echo "  S4_ENABLED=${S4_ENABLED}"
+  echo "  S4_DEPLOYED_ON_CLUSTER=${S4_DEPLOYED_ON_CLUSTER}"
+  echo "  S4_OVERLAY=${S4_OVERLAY}"
+  echo "  S4_API_HOST=${S4_API_HOST}"
+
+  if [[ "${S4_ENABLED}" != "true" ]]; then
+    echo "S4_ENABLED=false — skipping s4/overlays patches"
+    return 0
+  fi
+
+  if [[ "${S4_DEPLOYED_ON_CLUSTER}" == "true" ]]; then
+    maybe_resolve_s4_host_from_cluster
+  fi
+
+  : "${S4_API_HOST:?S4_API_HOST is required when S4_ENABLED=true}"
+  : "${S4_AWS_ACCESS_KEY_ID:?S4_AWS_ACCESS_KEY_ID is required when S4_ENABLED=true}"
+  : "${S4_AWS_SECRET_ACCESS_KEY:?S4_AWS_SECRET_ACCESS_KEY is required when S4_ENABLED=true}"
+  : "${S4_UI_USERNAME:?S4_UI_USERNAME is required when S4_ENABLED=true}"
+  : "${S4_UI_PASSWORD:?S4_UI_PASSWORD is required when S4_ENABLED=true}"
+  : "${S4_BUCKET_NAME:?S4_BUCKET_NAME is required when S4_ENABLED=true}"
+
+  resolve_s4_overlay_paths
+  write_s4_route_patch
+  write_s4_secret_patch
+  apply_s4_to_loki_s3_params
+
+  echo "  Synced Loki S3 from S4: endpoint=${LOKI_S3_ENDPOINT} bucket=${LOKI_S3_BUCKET}"
+}
+
 configure_s3_overlay() {
   : "${LOKI_S3_ACCESS_KEY_ID:?LOKI_S3_ACCESS_KEY_ID is required}"
   : "${LOKI_S3_ACCESS_KEY_SECRET:?LOKI_S3_ACCESS_KEY_SECRET is required}"
@@ -574,10 +710,15 @@ configure_s3_overlay() {
   write_loki_cr_patch_s3
   write_loki_placement_patch
 
-  if [[ "${FETCH_S3_CA}" == "true" ]]; then
+  local fetch_ca="${FETCH_S3_CA}"
+  if [[ "${S4_ENABLED}" == "true" && "${S4_DEPLOYED_ON_CLUSTER}" == "true" ]]; then
+    fetch_ca=true
+  fi
+
+  if [[ "${fetch_ca}" == "true" ]]; then
     write_loki_ca_bundle_patch
   else
-    echo "Skipping Loki TLS CA update (set FETCH_S3_CA=true and optionally S3_CA_FILE in the HEADER)"
+    echo "Skipping Loki TLS CA update (set FETCH_S3_CA=true, or S4_ENABLED=true with S4_DEPLOYED_ON_CLUSTER=true)"
   fi
 }
 
@@ -596,9 +737,12 @@ configure_overlays() {
   echo "=== Logging overlays ==="
   echo "  STORAGE_BACKEND=${STORAGE_BACKEND}"
   echo "  OVERLAY=${OVERLAY}"
+  echo "  S4_ENABLED=${S4_ENABLED}"
   echo "  LOKI_STORAGE_CLASS=${LOKI_STORAGE_CLASS}"
   echo "  LOKI_NODE_SELECTOR=${LOKI_NODE_SELECTOR_KEY}=${LOKI_NODE_SELECTOR_VALUE}"
   echo "  LOKI_TOLERATION=${LOKI_TOLERATION_KEY}=${LOKI_TOLERATION_VALUE}:${LOKI_TOLERATION_EFFECT}"
+
+  configure_s4_overlays
 
   resolve_overlay_paths
   echo "  OVERLAY_DIR=${OVERLAY_DIR}"
@@ -623,6 +767,8 @@ main() {
   echo "Configuring overlay patches from HEADER..."
   echo "  STORAGE_BACKEND=${STORAGE_BACKEND}"
   echo "  OVERLAY=${OVERLAY}"
+  echo "  S4_ENABLED=${S4_ENABLED}"
+  echo "  S4_OVERLAY=${S4_OVERLAY}"
   echo "  GIT_PROTOCOL=${GIT_PROTOCOL}"
   echo "  GIT_REPO_URL=${GIT_REPO_URL}"
   echo "  GIT_TARGET_REVISION=${GIT_TARGET_REVISION}"
@@ -637,6 +783,9 @@ main() {
   echo "Done. Review git diff, then commit/push so Argo CD can sync."
   echo "  Kustomize path: see README (oc apply -k ...)"
   echo "  GitOps path:    oc apply -k gitops/app-of-apps"
+  if [[ "${S4_ENABLED}" == "true" ]]; then
+    echo "  S4:           ./deploy-s4.sh   (after configure; then set S4_DEPLOYED_ON_CLUSTER=true and re-run)"
+  fi
   if [[ "${STORAGE_BACKEND}" == "odf" ]]; then
     echo "  ODF: after apply, wait for ObjectBucketClaim Bound + loki-odf-secret-sync Job."
   fi

@@ -9,10 +9,11 @@ Supports:
 
 Object storage backends:
 
-| Backend | Overlay | When to use |
-|---------|---------|-------------|
-| **S3 / S4** | `logging/loki-instance/overlays/s3` | External S3-compatible bucket (AWS, MinIO, S4, Ceph RGW, …) |
-| **ODF** | `logging/loki-instance/overlays/odf` | OpenShift Data Foundation NooBaa / Multicloud Object Gateway via `ObjectBucketClaim` |
+| Backend | Overlay / package | When to use |
+|---------|-------------------|-------------|
+| **In-repo S4** | `s4/` + Loki `overlays/s3` | Lab/demo S3-compatible storage packaged in this repo ([S4](https://github.com/rh-aiservices-bu/s4)) |
+| **External S3** | Loki `overlays/s3` | Existing AWS / MinIO / Ceph RGW / remote S4 |
+| **ODF** | Loki `overlays/odf` | OpenShift Data Foundation NooBaa / MCG via `ObjectBucketClaim` |
 
 ---
 
@@ -21,7 +22,8 @@ Object storage backends:
 - [Repository structure](#repository-structure)
 - [Prerequisites](#prerequisites)
 - [Storage configuration guide](#storage-configuration-guide)
-  - [S3 / S4](#s3--s4-external-object-storage)
+  - [In-repo S4 (recommended for labs)](#in-repo-s4-recommended-for-labs)
+  - [External S3](#external-s3)
   - [ODF (ObjectBucketClaim / NooBaa)](#odf-objectbucketclaim--noobaa)
 - [Script usage](#script-usage)
 - [Deploy with Kustomize only](#deploy-with-kustomize-only)
@@ -35,16 +37,20 @@ Object storage backends:
 
 ```text
 deploy-gitops-logging/
-├── configure-overlays.sh          # Idempotent overlay / Argo URL updater
+├── configure-overlays.sh          # Idempotent overlay / Argo URL updater (HEADER only)
+├── deploy-s4.sh                   # Deploy S4 + create Loki bucket
 ├── scripts/
 │   └── sync-odf-loki-secret.sh    # Manual ODF → Loki secret helper
+├── s4/
+│   ├── base/                      # S4 Deployment, Service, Routes, PVC, Secret
+│   └── overlays/<S4_OVERLAY>/     # S3 route host + credentials patches (default lab)
 ├── logging/
 │   ├── operator/base/             # Cluster Logging Operator (Subscription)
 │   ├── loki-operator/base/        # Loki Operator
 │   ├── loki-instance/
 │   │   ├── base/                  # LokiStack + placeholder S3 Secret/CA
 │   │   └── overlays/
-│   │       ├── s3/                # External S3/S4 patches
+│   │       ├── s3/                # External / S4-backed S3 patches
 │   │       └── odf/               # ObjectBucketClaim + secret-sync Job
 │   ├── instance/base/             # ClusterLogForwarder + collector RBAC
 │   ├── coo/base/                  # Cluster Observability Operator + Logging UIPlugin
@@ -57,12 +63,16 @@ deploy-gitops-logging/
     └── collect-git-ca.sh
 ```
 
-Apply order (Kustomize or Argo sync waves):
+**Typical lab order (with S4):** configure overlays → `./deploy-s4.sh` → refresh CA (`S4_DEPLOYED_ON_CLUSTER=true`) → deploy logging.
+
+Apply order for logging (Kustomize or Argo sync waves):
 
 1. Logging operator + Loki operator  
 2. LokiStack instance (storage overlay)  
 3. ClusterLogForwarder  
 4. COO + Logging UIPlugin  
+
+S4 is **not** managed by Argo CD in this repo; deploy it with `./deploy-s4.sh` (or `oc apply -k s4/overlays/<name>`).
 
 ---
 
@@ -73,7 +83,8 @@ Apply order (Kustomize or Argo sync waves):
 | OpenShift | 4.14+ recommended (Logging / Loki operator channels `stable-6.x`) |
 | CLI | `oc` (uses embedded kustomize), `openssl`, `python3`, `bash` |
 | Block storage | A `StorageClass` for Loki PVCs (e.g. `gp3-csi`, `thin-csi`, `ocs-storagecluster-ceph-rbd`) |
-| Object storage | External S3/S4 **or** ODF with NooBaa MCG |
+| Object storage | In-repo S4, external S3, **or** ODF with NooBaa MCG |
+| S4 path only | Default `StorageClass` for the `s4-data` PVC; outbound pull of `quay.io/rh-aiservices-bu/s4:latest` |
 | GitOps path only | OpenShift GitOps operator (`openshift-gitops`) already installed, or install it yourself before applying App-of-Apps |
 | Infra nodes (optional) | Nodes labeled/tainted for Loki placement (see [Loki node placement](#loki-node-placement)) |
 
@@ -106,16 +117,94 @@ LokiStack always needs **S3-compatible** object storage. Choose one path.
 
 ### Compare backends
 
-| | **S3 / S4** | **ODF (NooBaa)** |
-|--|-------------|------------------|
-| Bucket | You create externally | `ObjectBucketClaim` provisions it |
-| Credentials | You supply access key / secret | OBC creates them; Job/script maps to Loki format |
-| Endpoint | External HTTPS URL | Cluster-internal NooBaa S3 service |
-| TLS CA | Often a custom CA ConfigMap (`loki-s3-ca-bundle`) | Usually `openshift-service-ca.crt` |
-| Overlay | `overlays/s3` | `overlays/odf` |
-| Extra ops | Create bucket + IAM policy first | ODF must already be installed |
+| | **In-repo S4** | **External S3** | **ODF (NooBaa)** |
+|--|----------------|-----------------|------------------|
+| Bucket | `./deploy-s4.sh` creates it | You create externally | `ObjectBucketClaim` provisions it |
+| Credentials | `S4_*` in HEADER | `LOKI_S3_*` in HEADER | OBC → Job/script maps to Loki format |
+| Endpoint | S4 API Route (`S4_API_HOST`) | Your S3 HTTPS URL | Cluster-internal NooBaa S3 |
+| TLS CA | Fetched after S4 is up (`S4_DEPLOYED_ON_CLUSTER`) | `FETCH_S3_CA` / `S3_CA_FILE` | `openshift-service-ca.crt` |
+| Loki overlay | `overlays/s3` | `overlays/s3` | `overlays/odf` |
+| Extra ops | Deploy `s4/` first | IAM + bucket first | ODF must already be installed |
 
-### S3 / S4 (external object storage)
+### In-repo S4 (recommended for labs)
+
+[S4](https://github.com/rh-aiservices-bu/s4) is packaged under `s4/` as Kustomize. It exposes:
+
+| Route | Port | Purpose |
+|-------|------|---------|
+| `s4` (UI) | 5000 | Web UI + REST API (`https://<ui-host>/api`) used by `deploy-s4.sh` to create buckets |
+| `s4-api` (S3) | 7480 | S3 API hostname Loki uses (`S4_API_HOST`) |
+
+**Important:** Loki’s endpoint is the **S3 Route** (`s4-api` → `S4_API_HOST`), not the UI Route host.
+
+#### 1. Edit HEADER for S4 + Loki
+
+```bash
+# In configure-overlays.sh HEADER:
+STORAGE_BACKEND="s3"
+OVERLAY="s3"
+S4_ENABLED=true
+S4_DEPLOYED_ON_CLUSTER=false
+S4_OVERLAY="lab"
+S4_API_HOST="s3.s4.apps.<cluster-domain>"   # must match apps domain / DNS
+S4_AWS_ACCESS_KEY_ID="s4admin"
+S4_AWS_SECRET_ACCESS_KEY="s4secret"
+S4_UI_USERNAME="admin"
+S4_UI_PASSWORD="changeme"                   # change before deploy
+S4_BUCKET_NAME="loggingstack"
+LOKI_STORAGE_CLASS="gp3-csi"                # existing block StorageClass
+GIT_REPO_URL="https://github.com/<org>/deploy-gitops-logging.git"
+```
+
+When `S4_ENABLED=true`, the script writes `s4/overlays/<S4_OVERLAY>/` and syncs Loki S3 access key / secret / endpoint / bucket from the `S4_*` values.
+
+```bash
+./configure-overlays.sh
+```
+
+#### 2. Deploy S4 and create the bucket
+
+```bash
+./deploy-s4.sh
+```
+
+What `deploy-s4.sh` does:
+
+1. Creates namespace `s4` (if missing)
+2. Applies `s4/overlays/<S4_OVERLAY>` with `oc apply -k`
+3. Restarts Deployment `s4` and waits for rollout
+4. Reads UI credentials from Secret `s4-credentials`
+5. Waits for UI Route `s4` and REST API readiness
+6. Logs into the [S4 REST API](https://github.com/rh-aiservices-bu/s4/tree/main/docs/api) and creates bucket `S4_BUCKET_NAME` (HTTP 409 = already exists)
+
+Manual alternative (no bucket create):
+
+```bash
+oc create namespace s4 --dry-run=client -o yaml | oc apply -f -
+oc apply -n s4 -k s4/overlays/lab
+oc rollout status deployment/s4 -n s4
+```
+
+#### 3. Refresh Loki TLS CA from the live S4 route
+
+```bash
+# HEADER:
+S4_DEPLOYED_ON_CLUSTER=true
+# Optional: leave S4_API_HOST as-is; script prefers the live Route host when oc+kubeconfig work
+./configure-overlays.sh
+```
+
+This updates `logging/loki-instance/overlays/<OVERLAY>/loki-s3-ca-bundle-patch.yaml` from the S4 API TLS chain (issuer/CA preferred).
+
+#### 4. Deploy logging
+
+Continue with [Deploy with Kustomize only](#deploy-with-kustomize-only) or [Deploy with OpenShift GitOps](#deploy-with-openshift-gitops-argo-cd). Use overlay path `logging/loki-instance/overlays/s3` (or your `OVERLAY` name).
+
+#### Use a different S4 overlay name
+
+Set `S4_OVERLAY=prod` in the HEADER and run `./configure-overlays.sh`. If `s4/overlays/prod` is missing, it is seeded from `s4/overlays/lab`, then filled with your `S4_*` values. Deploy with the same HEADER via `./deploy-s4.sh`.
+
+### External S3
 
 1. Create a bucket (example name: `loggingstack`).
 2. Create an IAM user/policy (or equivalent) with `s3:ListBucket`, `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject`, and tagging permissions on that bucket.
@@ -126,6 +215,7 @@ LokiStack always needs **S3-compatible** object storage. Choose one path.
 # HEADER examples (edit in configure-overlays.sh):
 #   STORAGE_BACKEND="s3"
 #   OVERLAY="s3"
+#   S4_ENABLED=false
 #   LOKI_S3_ENDPOINT="https://s3.apps.example.com"
 #   LOKI_S3_BUCKET="loggingstack"
 #   LOKI_S3_ACCESS_KEY_ID="<access-key>"
@@ -155,6 +245,7 @@ oc get pods -n openshift-storage
 # HEADER examples (edit in configure-overlays.sh):
 #   STORAGE_BACKEND="odf"
 #   OVERLAY="odf"
+#   S4_ENABLED=false
 #   ODF_STORAGE_CLASS="openshift-storage.noobaa.io"
 #   LOKI_STORAGE_CLASS="ocs-storagecluster-ceph-rbd"
 #   GIT_REPO_URL="https://github.com/<org>/deploy-gitops-logging.git"
@@ -187,17 +278,26 @@ The script is idempotent: it seeds missing overlay directories from the `s3` or 
 |----------|---------|---------|
 | `STORAGE_BACKEND` | `s3` or `odf` | `s3` |
 | `OVERLAY` | Overlay directory under `logging/loki-instance/overlays/` | `s3` |
-| `LOKI_S3_ACCESS_KEY_ID` | S3 access key | `CHANGE_ME_ACCESS_KEY` |
-| `LOKI_S3_ACCESS_KEY_SECRET` | S3 secret key | `CHANGE_ME_SECRET_KEY` |
-| `LOKI_S3_BUCKET` | Bucket name | `loggingstack` |
-| `LOKI_S3_ENDPOINT` | S3 API URL | `https://s3.example.com` |
+| `S4_ENABLED` | Write `s4/overlays/<S4_OVERLAY>` and sync Loki S3 from `S4_*` | `true` |
+| `S4_DEPLOYED_ON_CLUSTER` | After S4 is up, fetch Loki TLS CA from S4 API host | `false` |
+| `S4_OVERLAY` | Overlay under `s4/overlays/` (seeded from `lab`) | `lab` |
+| `S4_NAMESPACE` | S4 namespace | `s4` |
+| `S4_API_ROUTE_NAME` | OpenShift Route name for S3 API | `s4-api` |
+| `S4_API_HOST` | S3 Route hostname (Loki endpoint host) | `s3.s4.apps.example.com` |
+| `S4_AWS_ACCESS_KEY_ID` / `S4_AWS_SECRET_ACCESS_KEY` | S4 / Loki S3 credentials | `s4admin` / `s4secret` |
+| `S4_UI_USERNAME` / `S4_UI_PASSWORD` | S4 UI / REST login | `admin` / `changeme` |
+| `S4_BUCKET_NAME` | Bucket created by `./deploy-s4.sh` | `loggingstack` |
+| `LOKI_S3_ACCESS_KEY_ID` | S3 access key (overwritten from S4 when `S4_ENABLED=true`) | placeholder |
+| `LOKI_S3_ACCESS_KEY_SECRET` | S3 secret key (overwritten from S4 when enabled) | placeholder |
+| `LOKI_S3_BUCKET` | Bucket name (overwritten from `S4_BUCKET_NAME` when enabled) | `loggingstack` |
+| `LOKI_S3_ENDPOINT` | S3 API URL (overwritten from `https://S4_API_HOST` when enabled) | `https://s3.example.com` |
 | `LOKI_S3_REGION` | Optional region key | empty |
 | `LOKI_S3_FORCE_PATH_STYLE` | Path-style addressing | `true` |
 | `LOKI_S3_SECRET_NAME` | LokiStack secret name | `logging-loki-s3` |
 | `LOKI_S3_SECRET_TYPE` | LokiStack secret type | `s3` |
 | `LOKI_TLS_CA_NAME` | S3 TLS CA ConfigMap name | `loki-s3-ca-bundle` |
 | `FETCH_S3_CA` | Fetch/refresh S3 TLS CA into the overlay patch | `false` |
-| `S3_CA_FILE` | Optional PEM path (used when `FETCH_S3_CA=true`) | empty |
+| `S3_CA_FILE` | Optional PEM path (used when CA fetch is enabled) | empty |
 | `ODF_OBC_NAME` | ObjectBucketClaim name | `logging-loki-obc` |
 | `ODF_GENERATE_BUCKET_NAME` | OBC `generateBucketName` | `logging-loki` |
 | `ODF_STORAGE_CLASS` | OBC StorageClass | `openshift-storage.noobaa.io` |
@@ -222,12 +322,24 @@ The script is idempotent: it seeds missing overlay directories from the `s3` or 
 
 ### Examples
 
-**S3 lab overlay named `lab`** (auto-seeded from `overlays/s3`):
+**In-repo S4 + Loki `s3` overlay:**
+
+```bash
+# HEADER: S4_ENABLED=true, S4_OVERLAY=lab, S4_API_HOST=..., S4_BUCKET_NAME=loggingstack,
+#         STORAGE_BACKEND=s3, OVERLAY=s3, LOKI_STORAGE_CLASS=thin-csi, GIT_REPO_URL=...
+./configure-overlays.sh
+./deploy-s4.sh
+# HEADER: S4_DEPLOYED_ON_CLUSTER=true
+./configure-overlays.sh
+```
+
+**External S3 lab overlay named `lab`** (auto-seeded from `overlays/s3`):
 
 ```bash
 # In configure-overlays.sh HEADER:
 #   STORAGE_BACKEND="s3"
 #   OVERLAY="lab"
+#   S4_ENABLED=false
 #   LOKI_S3_ENDPOINT="https://s3.lab.example.com"
 #   LOKI_S3_BUCKET="loggingstack"
 #   LOKI_S3_ACCESS_KEY_ID="..."
@@ -264,11 +376,16 @@ The script is idempotent: it seeds missing overlay directories from the `s3` or 
 
 Copy-paste path (operators → Loki → collector → COO).
 
-### 1. Configure overlays
+### 1. Configure overlays (and S4 if used)
 
 ```bash
 cd /path/to/deploy-gitops-logging
-# Edit HEADER in configure-overlays.sh (S3 or ODF — see Storage configuration guide)
+# Edit HEADER in configure-overlays.sh (S4 / external S3 / ODF — see Storage guide)
+./configure-overlays.sh
+
+# If S4_ENABLED=true:
+./deploy-s4.sh
+# Then set S4_DEPLOYED_ON_CLUSTER=true in the HEADER and re-run:
 ./configure-overlays.sh
 ```
 
@@ -322,12 +439,17 @@ oc get uiplugin logging
 
 Assumes OpenShift GitOps is installed (`openshift-gitops` namespace) and you can push this repo to a Git remote Argo CD can reach.
 
-### 1. Configure overlays + Git settings
+### 1. Configure overlays + Git settings (+ S4 if used)
 
 ```bash
 # Edit HEADER in configure-overlays.sh, including:
-#   STORAGE_BACKEND, OVERLAY, LOKI_S3_* (or ODF_*), LOKI_STORAGE_CLASS
+#   STORAGE_BACKEND, OVERLAY, S4_* (or LOKI_S3_* / ODF_*), LOKI_STORAGE_CLASS
 #   GIT_REPO_URL, GIT_TARGET_REVISION, GIT_PROTOCOL / GIT_TLS_* or GIT_SSH_*
+./configure-overlays.sh
+
+# If using in-repo S4 (before committing Loki CA):
+./deploy-s4.sh
+# HEADER: S4_DEPLOYED_ON_CLUSTER=true
 ./configure-overlays.sh
 ```
 
@@ -393,6 +515,10 @@ oc get applications -n openshift-gitops \
 ## Verification
 
 ```bash
+# S4 (if used)
+oc get pods,route,pvc -n s4
+oc get route s4-api -n s4 -o jsonpath='{.spec.host}{"\n"}'
+
 # Operators
 oc get csv -n openshift-logging
 oc get csv -n openshift-operators-redhat
@@ -444,7 +570,9 @@ Change `LOKI_NODE_SELECTOR_*` / `LOKI_TOLERATION_*` in the HEADER, re-run `./con
 | Symptom | Likely cause | Fix |
 |---------|--------------|-----|
 | Loki pods `Pending` | Missing infra label/taint or wrong StorageClass | Label/taint nodes; set `LOKI_STORAGE_CLASS` in the HEADER to an existing SC |
-| `invalid document separator` in CA ConfigMap | PEM not indented under `\|` | Set `FETCH_S3_CA=true` (and optionally `S3_CA_FILE`) in the HEADER, then re-run |
+| `invalid document separator` in CA ConfigMap | PEM not indented under `\|` | Set `S4_DEPLOYED_ON_CLUSTER=true` or `FETCH_S3_CA=true`, then re-run configure |
+| S4 login `401 Unauthorized` | Pod still on old Secret / wrong UI creds | Re-run `./deploy-s4.sh` (rollout restart + creds from Secret) |
+| S4 PVC pending | No default StorageClass | Set a StorageClass on `s4/base/s4-pvc.yaml` or make one default |
 | ODF Loki secret missing | OBC not Bound / Job failed | `oc describe obc`, `oc logs job/loki-odf-secret-sync`, or `./scripts/sync-odf-loki-secret.sh` |
 | Argo `x509: unknown authority` | Self-signed Git TLS | `./gitops/collect-git-ca.sh` and trust CA in Argo CD |
 | UIPlugin not found | COO CRD not ready | Wait for COO CSV; sync option `SkipDryRunOnMissingResource` is set |
@@ -454,4 +582,4 @@ Change `LOKI_NODE_SELECTOR_*` / `LOKI_TOLERATION_*` in the HEADER, re-run `./con
 
 ## License / scope
 
-This project is dedicated to OpenShift Logging only. It intentionally omits Keycloak, Postgres, Ansible playbooks, and in-cluster S4 packaging from the sibling `ocp-deploy-keycloak-logging` repository. Point Loki at any reachable S3-compatible endpoint or ODF NooBaa.
+This project is dedicated to OpenShift Logging (plus optional in-repo [S4](https://github.com/rh-aiservices-bu/s4) for labs). It intentionally omits Keycloak, Postgres, and Ansible playbooks from the sibling `ocp-deploy-keycloak-logging` repository. Point Loki at in-repo S4, any reachable S3-compatible endpoint, or ODF NooBaa.
