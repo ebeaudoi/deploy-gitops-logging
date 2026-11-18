@@ -1,0 +1,13 @@
+# OpenShift Data Foundation (NooBaa / Multicloud Object Gateway) bucket for Loki.
+# Requires ODF installed with ObjectBucketClaim CRD and a NooBaa StorageClass
+# (default: openshift-storage.noobaa.io).
+apiVersion: objectbucket.io/v1alpha1
+kind: ObjectBucketClaim
+metadata:
+  name: logging-loki-obc
+  namespace: openshift-logging
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  generateBucketName: logging-loki
+  storageClassName: openshift-storage.noobaa.io

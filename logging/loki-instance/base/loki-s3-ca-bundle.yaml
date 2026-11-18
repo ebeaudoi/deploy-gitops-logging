@@ -1,0 +1,12 @@
+# CA bundle used by LokiStack when talking to HTTPS object storage.
+# Replace service-ca.crt via overlay patch (HEADER FETCH_S3_CA=true, then ./configure-overlays.sh).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loki-s3-ca-bundle
+  namespace: openshift-logging
+data:
+  service-ca.crt: |
+    -----BEGIN CERTIFICATE-----
+    REPLACE_WITH_OBJECT_STORAGE_CA
+    -----END CERTIFICATE-----

@@ -1,0 +1,29 @@
+# App-of-Apps root for the logging stack.
+# Syncs logging/argoCD (AppProject applogging + child Applications).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: logging-apps
+  namespace: openshift-gitops
+spec:
+  project: cluster-config
+  source:
+    repoURL: https://github.com/EXAMPLE/deploy-gitops-logging.git
+    targetRevision: HEAD
+    path: logging/argoCD
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: openshift-gitops
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false
+      - SkipDryRunOnMissingResource=true
+    retry:
+      limit: 10
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 5m

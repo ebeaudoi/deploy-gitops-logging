@@ -1,0 +1,36 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: loki-instance
+  namespace: openshift-gitops
+spec:
+  project: applogging
+  source:
+    repoURL: https://github.com/EXAMPLE/deploy-gitops-logging.git
+    targetRevision: HEAD
+    # Updated by configure-overlays.sh to logging/loki-instance/overlays/<OVERLAY>
+    path: logging/loki-instance/overlays/s3
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: openshift-logging
+  ignoreDifferences:
+    - group: ""
+      kind: Secret
+      name: logging-loki-s3
+      jsonPointers:
+        - /data
+        - /stringData
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - SkipDryRunOnMissingResource=true
+      - RespectIgnoreDifferences=true
+    retry:
+      limit: 10
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 5m

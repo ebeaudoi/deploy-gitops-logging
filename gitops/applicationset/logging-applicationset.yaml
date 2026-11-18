@@ -1,0 +1,48 @@
+# Optional multi-cluster / multi-overlay ApplicationSet.
+# Each generator entry maps a cluster destination to a Loki storage overlay.
+# Requires OpenShift GitOps with ApplicationSet controller enabled (default).
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: logging-stack
+  namespace: openshift-gitops
+spec:
+  generators:
+    - list:
+        elements:
+          # Example: single in-cluster deploy using the s3 overlay
+          - cluster: in-cluster
+            url: https://github.com/EXAMPLE/deploy-gitops-logging.git
+            overlay: s3
+          # Example: second cluster / ODF overlay (uncomment and set url)
+          # - cluster: prod
+          #   url: https://kubernetes.default.svc
+          #   overlay: odf
+  template:
+    metadata:
+      name: 'logging-{{overlay}}-{{cluster}}'
+      namespace: openshift-gitops
+    spec:
+      project: applogging
+      source:
+        repoURL: https://github.com/EXAMPLE/deploy-gitops-logging.git
+        targetRevision: HEAD
+        path: 'logging/loki-instance/overlays/{{overlay}}'
+      destination:
+        server: '{{url}}'
+        namespace: openshift-logging
+      ignoreDifferences:
+        - group: ""
+          kind: Secret
+          name: logging-loki-s3
+          jsonPointers:
+            - /data
+            - /stringData
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true
+          - SkipDryRunOnMissingResource=true
+          - RespectIgnoreDifferences=true

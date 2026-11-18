@@ -1,0 +1,14 @@
+# Placeholder S3 credentials for LokiStack.
+# Override via overlay patches (configure-overlays.sh) — do not commit real secrets.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: logging-loki-s3
+  namespace: openshift-logging
+type: Opaque
+data:
+  access_key_id: Q0hBTkdFX01FX0FDQ0VTU19LRVk=
+  access_key_secret: Q0hBTkdFX01FX1NFQ1JFVF9LRVk=
+  bucketnames: bG9nZ2luZ3N0YWNr
+  endpoint: aHR0cHM6Ly9zMy5leGFtcGxlLmNvbQ==
+  forcepathstyle: dHJ1ZQ==

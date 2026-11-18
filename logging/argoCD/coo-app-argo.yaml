@@ -1,0 +1,28 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: coo
+  namespace: openshift-gitops
+spec:
+  project: applogging
+  source:
+    repoURL: https://github.com/EXAMPLE/deploy-gitops-logging.git
+    targetRevision: HEAD
+    path: logging/coo/base
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: openshift-cluster-observability-operator
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - SkipDryRunOnMissingResource=true
+      - RespectIgnoreDifferences=true
+    retry:
+      limit: 10
+      backoff:
+        duration: 30s
+        factor: 2
+        maxDuration: 5m

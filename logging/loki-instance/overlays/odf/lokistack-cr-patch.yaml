@@ -1,0 +1,17 @@
+apiVersion: loki.grafana.com/v1
+kind: LokiStack
+metadata:
+  name: logging-loki
+  namespace: openshift-logging
+spec:
+  storage:
+    schemas:
+      - effectiveDate: "2026-06-15"
+        version: v13
+    secret:
+      name: logging-loki-s3
+      type: s3
+    tls:
+      # Use the cluster service CA (NooBaa S3 is typically cluster-internal HTTPS).
+      caName: openshift-service-ca.crt
+  storageClassName: ocs-storagecluster-ceph-rbd

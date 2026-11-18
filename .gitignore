@@ -1,0 +1,25 @@
+# Local / generated secrets and certs
+*.pem
+*.key
+!**/tls.key
+gitops/git-ca.crt
+**/service-ca.crt
+!logging/loki-instance/**/service-ca.crt
+
+# Editor / OS
+.DS_Store
+*.swp
+*~
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Kubeconfig / tokens — never commit
+*kubeconfig*
+*.token
+.env
+.env.*

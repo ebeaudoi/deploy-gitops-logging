@@ -1,0 +1,21 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: loki-operator
+  namespace: openshift-gitops
+spec:
+  project: applogging
+  source:
+    repoURL: https://github.com/EXAMPLE/deploy-gitops-logging.git
+    targetRevision: HEAD
+    path: logging/loki-operator/base
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: openshift-operators-redhat
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - SkipDryRunOnMissingResource=true

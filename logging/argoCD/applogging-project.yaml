@@ -1,0 +1,34 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: applogging
+  namespace: openshift-gitops
+spec:
+  description: OpenShift Logging stack (operators, LokiStack, COO, ClusterLogForwarder)
+  sourceRepos:
+    - https://github.com/EXAMPLE/deploy-gitops-logging.git
+  destinations:
+    - server: https://kubernetes.default.svc
+      namespace: openshift-logging
+    - server: https://kubernetes.default.svc
+      namespace: openshift-operators-redhat
+    - server: https://kubernetes.default.svc
+      namespace: openshift-cluster-observability-operator
+    - server: https://kubernetes.default.svc
+      namespace: openshift-gitops
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+    - group: rbac.authorization.k8s.io
+      kind: ClusterRole
+    - group: rbac.authorization.k8s.io
+      kind: ClusterRoleBinding
+    - group: user.openshift.io
+      kind: Group
+    - group: observability.openshift.io
+      kind: UIPlugin
+    - group: objectbucket.io
+      kind: ObjectBucketClaim
+  namespaceResourceWhitelist:
+    - group: "*"
+      kind: "*"
