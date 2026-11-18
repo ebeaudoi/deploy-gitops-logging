@@ -19,19 +19,19 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${SCRIPT_DIR}"
 
-# Load HEADER assignments from configure-overlays.sh without executing main.
+# Load HEADER + fixed defaults from configure-overlays.sh without executing main.
 # shellcheck disable=SC1091
 eval "$(
   awk '
     /^# HEADER/ { keep=1; next }
-    /^# =+.*Runtime paths/ { exit }
+    /^# Runtime paths/ { exit }
     keep && /^[A-Za-z_][A-Za-z0-9_]*=/ { print }
   ' "${REPO_ROOT}/configure-overlays.sh"
 )"
 
 S4_NAMESPACE="${S4_NAMESPACE:-s4}"
-S4_OVERLAY="${S4_OVERLAY:-lab}"
-S4_BUCKET_NAME="${S4_BUCKET_NAME:-${LOKI_S3_BUCKET:-loggingstack}}"
+S4_OVERLAY="${OVERLAY:-lab}"
+S4_BUCKET_NAME="${S4_BUCKET_NAME:-loggingstack}"
 KUBECONFIG_PATH="${KUBECONFIG_PATH:-${HOME}/ocpkubeconfig}"
 S4_OVERLAY_DIR="${REPO_ROOT}/s4/overlays/${S4_OVERLAY}"
 
@@ -42,7 +42,7 @@ fi
 
 if [[ ! -d "${S4_OVERLAY_DIR}" ]]; then
   echo "ERROR: S4 overlay missing: ${S4_OVERLAY_DIR}" >&2
-  echo "       Set S4_OVERLAY in configure-overlays.sh HEADER and run ./configure-overlays.sh" >&2
+  echo "       Set OVERLAY in configure-overlays.sh HEADER (STORAGE_BACKEND=s4) and run ./configure-overlays.sh" >&2
   exit 1
 fi
 

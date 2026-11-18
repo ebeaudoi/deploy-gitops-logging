@@ -6,7 +6,7 @@ metadata:
 spec:
   project: applogging
   source:
-    repoURL: https://github.com/EXAMPLE/deploy-gitops-logging.git
+    repoURL: https://github.com/ebeaudoin/deploy-gitops-logging.git
     targetRevision: HEAD
     path: logging/operator/base
   destination:

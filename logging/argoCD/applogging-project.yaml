@@ -6,7 +6,7 @@ metadata:
 spec:
   description: OpenShift Logging stack (operators, LokiStack, COO, ClusterLogForwarder)
   sourceRepos:
-    - https://github.com/EXAMPLE/deploy-gitops-logging.git
+    - https://github.com/ebeaudoin/deploy-gitops-logging.git
   destinations:
     - server: https://kubernetes.default.svc
       namespace: openshift-logging

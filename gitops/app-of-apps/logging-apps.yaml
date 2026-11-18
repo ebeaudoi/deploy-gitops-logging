@@ -8,7 +8,7 @@ metadata:
 spec:
   project: cluster-config
   source:
-    repoURL: https://github.com/EXAMPLE/deploy-gitops-logging.git
+    repoURL: https://github.com/ebeaudoin/deploy-gitops-logging.git
     targetRevision: HEAD
     path: logging/argoCD
   destination:

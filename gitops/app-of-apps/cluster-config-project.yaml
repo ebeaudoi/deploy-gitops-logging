@@ -6,7 +6,7 @@ metadata:
 spec:
   description: Parent App-of-Apps for OpenShift Logging
   sourceRepos:
-    - https://github.com/EXAMPLE/deploy-gitops-logging.git
+    - https://github.com/ebeaudoin/deploy-gitops-logging.git
   destinations:
     - server: https://kubernetes.default.svc
       namespace: openshift-gitops

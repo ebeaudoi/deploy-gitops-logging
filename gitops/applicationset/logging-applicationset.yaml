@@ -12,7 +12,7 @@ spec:
         elements:
           # Example: single in-cluster deploy using the s3 overlay
           - cluster: in-cluster
-            url: https://github.com/EXAMPLE/deploy-gitops-logging.git
+            url: https://github.com/ebeaudoin/deploy-gitops-logging.git
             overlay: s3
           # Example: second cluster / ODF overlay (uncomment and set url)
           # - cluster: prod
@@ -25,7 +25,7 @@ spec:
     spec:
       project: applogging
       source:
-        repoURL: https://github.com/EXAMPLE/deploy-gitops-logging.git
+        repoURL: https://github.com/ebeaudoin/deploy-gitops-logging.git
         targetRevision: HEAD
         path: 'logging/loki-instance/overlays/{{overlay}}'
       destination:

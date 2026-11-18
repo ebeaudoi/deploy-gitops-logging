@@ -6,10 +6,10 @@ metadata:
 spec:
   project: applogging
   source:
-    repoURL: https://github.com/EXAMPLE/deploy-gitops-logging.git
+    repoURL: https://github.com/ebeaudoin/deploy-gitops-logging.git
     targetRevision: HEAD
     # Updated by configure-overlays.sh to logging/loki-instance/overlays/<OVERLAY>
-    path: logging/loki-instance/overlays/s3
+    path: logging/loki-instance/overlays/lab
   destination:
     server: https://kubernetes.default.svc
     namespace: openshift-logging
